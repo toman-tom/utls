@@ -389,8 +389,22 @@ func (hs *clientHandshakeStateTLS13) processHelloRetryRequest() error {
 	// and utlsExtensionPadding are supposed to change
 	if hs.uconn != nil {
 		if hs.uconn.ClientHelloID != HelloGolang {
-			if len(hs.hello.pskIdentities) > 0 {
-				// TODO: wait for someone who cares about PSK to implement
+			var psk *UtlsPreSharedKeyExtension
+			for _, ext := range hs.uconn.Extensions {
+				if p, ok := ext.(*UtlsPreSharedKeyExtension); ok {
+					psk = p
+				}
+			}
+			switch {
+			case psk != nil && psk.Len() > 0 && len(hs.hello.pskIdentities) > 0:
+				// Kept by the code above, with the ticket age as it is now.
+				psk.Identities[0].ObfuscatedTicketAge = hs.hello.pskIdentities[0].obfuscatedTicketAge
+			case psk != nil && psk.Len() > 0:
+				// Dropped by the code above: the session's hash is not the selected suite's.
+				psk.PreSharedKeyCommon = PreSharedKeyCommon{}
+				psk.cachedLength = nil
+				psk.OmitEmptyPsk = true
+			case len(hs.hello.pskIdentities) > 0:
 				return errors.New("uTLS does not support reprocessing of PSK key triggered by HelloRetryRequest")
 			}
 
@@ -437,6 +451,19 @@ func (hs *clientHandshakeStateTLS13) processHelloRetryRequest() error {
 			}
 			if err := hs.uconn.MarshalClientHelloNoECH(); err != nil {
 				return err
+			}
+			if psk != nil && psk.Len() > 0 {
+				// The binders cover the first hello's hash, the HelloRetryRequest and this hello.
+				transcript := hs.suite.hash.New()
+				transcript.Write([]byte{typeMessageHash, 0, 0, uint8(len(chHash))})
+				transcript.Write(chHash)
+				if err := transcriptMsg(hs.serverHello, transcript); err != nil {
+					return err
+				}
+				if err := psk.patchBinders(hs.uconn.HandshakeState.Hello, transcript); err != nil {
+					return err
+				}
+				hs.hello.pskBinders = psk.Binders
 			}
 			hs.hello.original = hs.uconn.HandshakeState.Hello.Raw
 		}
