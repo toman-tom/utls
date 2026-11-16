@@ -5,6 +5,7 @@
 package tls
 
 import (
+	"crypto/ecdh"
 	"crypto/mlkem"
 	crand "crypto/rand"
 	"crypto/sha256"
@@ -2913,6 +2914,11 @@ func (uconn *UConn) ApplyPreset(p *ClientHelloSpec) error {
 					}
 
 					ext.KeyShares[i].Data = ecdheKey.PublicKey().Bytes()
+					keys := uconn.HandshakeState.State13.KeyShareKeys
+					if keys.Ecdhes == nil {
+						keys.Ecdhes = map[CurveID]*ecdh.PrivateKey{}
+					}
+					keys.Ecdhes[curveID] = ecdheKey
 					if !preferredCurveIsSet {
 						// only do this once for the first non-grease curve
 						uconn.HandshakeState.State13.KeyShareKeys.Ecdhe = ecdheKey
